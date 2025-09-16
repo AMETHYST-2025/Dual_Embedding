@@ -1,81 +1,95 @@
+import os
+import random
 import pandas as pd
 import numpy as np
-import random
-from tensorflow import keras
-from numpy import dot
-from numpy.linalg import norm
-from sentence_transformers import SentenceTransformer, SentenceTransformerTrainer, InputExample, losses, evaluation, datasets
+import matplotlib.pyplot as plt
+from sklearn.model_selection import train_test_split
+from sentence_transformers import SentenceTransformer, InputExample, losses
+from torch.utils.data import DataLoader
 import torch
-from torch import nn
+from tensorflow import keras
+from datasets import Dataset
 
+# Set seeds for reproducibility
 random_seed = 42
-keras.utils.set_random_seed(random_seed)
 def set_seed(seed):
-    random.seed(seed)                      # Python's random module
-    np.random.seed(seed)                   # NumPy
-    torch.manual_seed(seed)                # PyTorch CPU
-    torch.cuda.manual_seed(seed)           # PyTorch GPU
-    torch.cuda.manual_seed_all(seed)       # All GPUs (if using multi-GPU)
-    torch.backends.cudnn.deterministic = True  # Ensures deterministic behavior
-    torch.backends.cudnn.benchmark = False    # Disables auto-optimization for reproducibility
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 set_seed(random_seed)
 
-dataset_combinaison_embedding = "Data/Dataset_copolymers_combination_scores.csv"
-dir_save = "Save_model"
-DF_cosine_similarity = pd.read_csv(dataset_combinaison_embedding)
-DF_cosine_similarity = DF_cosine_similarity.sample(frac=1, random_state=random_seed)
-score_label1 ="PB_Tg_copolymers_MM_01" #Min-max norm
-score_label2 ="PB_Tg_copolymers_Exp_01" #Min-max norm
-DF_scores = DF_cosine_similarity[['SMILES_A', 'SMILES_B', score_label1, score_label2]][:]
+# -------------------- Parameters --------------------
+data_path = "Tg_score.csv"          # Path to the dataset CSV file
+score_column = "Exp_Tg"             # Column containing the target scores
+model_name = "Save_models/PolyBERT" # Pretrained model path or name
+batch_size = 16                      # Batch size for training
+num_epochs = 5                       # Number of training epochs
+save_dir = "Save_models/PolyBERT_Tg_Exp" # Directory to save fine-tuned model
+os.makedirs(save_dir, exist_ok=True)
 
+# -------------------- Load data --------------------
+df = pd.read_csv(data_path).dropna(subset=[score_column, 'SMILES_A', 'SMILES_B'])
+df = df.sample(frac=1, random_state=random_seed).reset_index(drop=True)  # Shuffle data
 
-model = SentenceTransformer('kuelumbus/polyBERT') #DeepChem/ChemBERTa-77M-MLM     #kuelumbus/polyBERT
-# Combinaison des loss
-class CombinedLoss(nn.Module):
-    def __init__(self, model, alpha=0.5):
-        super(CombinedLoss, self).__init__()
-        self.cosine_loss = losses.CosineSimilarityLoss(model=model)
-        self.mse_loss = losses.MSELoss(model=model)
-        self.alpha = alpha
+# -------------------- Prepare training examples --------------------
+train_examples = [
+    InputExample(texts=[row['SMILES_A'], row['SMILES_B']], label=float(row[score_column]))
+    for _, row in df.iterrows()
+]
 
-    def forward(self, sentence_features, labels):
-        labels = torch.tensor(labels, dtype=torch.float, device=sentence_features[0]['input_ids'].device)
-        F1_label = labels[:, 0]  # Première valeur
-        F2_label = labels[:, 1]  # Deuxième valeur
+# -------------------- Load model --------------------
+model = SentenceTransformer(model_name)
 
-        loss1 = self.cosine_loss(sentence_features, F1_label)
-        loss2 = self.cosine_loss(sentence_features, F2_label)
+# -------------------- Define loss function and dataloader --------------------
+train_dataloader = DataLoader(train_examples, shuffle=True, batch_size=batch_size)
+train_loss = losses.CosineSimilarityLoss(model)
 
-        return self.alpha[0] * loss1 + self.alpha[1] * loss2
-
-# SMILES_A, SMILES_B, score_label1, score_label2
-train_examples = []
-for i, row in DF_scores.iterrows():
-    train_examples.append(
-        InputExample(
-            texts=[row['SMILES_A'], row['SMILES_B']],
-            label=[float(row[score_label1]), float(row[score_label2])]
-        )
-    )
-
-
-
-# DataLoader
-train_dataloader = datasets.NoDuplicatesDataLoader(train_examples, batch_size=16)
-train_loss = CombinedLoss(model=model, alpha=[1, 0])
-model_name = "PB_Tg_MM" # for alpha=[1, 0] and "PB_Tg_Exp" for alpha=[0, 1]
-# Entraînement du modèle
+# -------------------- Training --------------------
 model.fit(
     train_objectives=[(train_dataloader, train_loss)],
-    epochs=5,
+    epochs=num_epochs,
     warmup_steps=10,
-    output_path='./'+model_name
+    output_path=save_dir
 )
 
-Polymer_1= "[*]CCCCCCCCCCCCCCCCCCCCC([*])COc1ccc(-c2ccc(SSc3ccc([N+](=O)[O-])cc3)s2)cc1"
-Polymer_2= "[*]CCCCCCCCSSc1ccc2c(c1)C(=O)N(C(=O)CCCCCCCCC(=O)OC([*])=O)C2=O"
-embedding1 = model.encode(Polymer_1) #model_reload
-embedding2 = model.encode(Polymer_2) #model_reload
-cosine_sim = dot(embedding1, embedding2) / (norm(embedding1) * norm(embedding2))
-print('0.75->',cosine_sim)
+# -------------------- Save the fine-tuned model --------------------
+model.save(save_dir)
+print(f"Model saved in: {save_dir}")
 
+# -------------------- Simple visualization --------------------
+# Select top 100 SMILES pairs by score
+sample_smiles = df[['SMILES_A', 'SMILES_B', score_column]].sort_values(by=score_column, ascending=False).head(100)
+
+# Load models before and after fine-tuning
+before_model = SentenceTransformer(model_name)
+after_model = SentenceTransformer(save_dir)
+
+# Define cosine similarity function
+cosine = lambda a, b: np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+before_sims, after_sims, true_scores = [], [], []
+
+# Compute embeddings and cosine similarities
+for _, row in sample_smiles.iterrows():
+    emb1_before = before_model.encode(row['SMILES_A'])
+    emb2_before = before_model.encode(row['SMILES_B'])
+    emb1_after = after_model.encode(row['SMILES_A'])
+    emb2_after = after_model.encode(row['SMILES_B'])
+
+    before_sims.append(cosine(emb1_before, emb2_before))
+    after_sims.append(cosine(emb1_after, emb2_after))
+    true_scores.append(row[score_column])
+
+# Plot the similarity comparison
+plt.figure(figsize=(10, 6))
+plt.plot(true_scores, before_sims, 'o', label='Before fine-tuning', alpha=0.7)
+plt.plot(true_scores, after_sims, 's', label='After fine-tuning', alpha=0.7)
+plt.xlabel("Target score (property similarity)")
+plt.ylabel("Cosine similarity")
+plt.title("Fine-tuning comparison: SMILES pairs with high "+score_column+" similarity")
+plt.legend()
+plt.grid(True)
+plt.tight_layout()
+plt.show()
