@@ -25,11 +25,12 @@ This repository contains the code and part of data used in the study:
   - `polyimides/`
   - `homopolymers/`
 
-Each experiment folder generally includes:
+Each experiment folder may include:
 - The datasets used, except for very large files like the [hypothetical polymer dataset](https://zenodo.org/records/7766806) (which is nearly 1GB).
 - A data loader script to generate datasets for the fine-tuning process in `Sentence_BERT`.
 - Model training scripts.
 - Some figures, such as histograms and result visualizations.
+- --
+- `PB_finetuning.py` fine-tunes embeddings using a dataset with two SMILES columns and a target score column.
 
-The foled
 ---
