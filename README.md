@@ -31,6 +31,6 @@ Each experiment folder may include:
 - Model training scripts.
 - Some figures, such as histograms and result visualizations.
 - --
-- `PB_finetuning.py` fine-tunes embeddings using a dataset with two SMILES columns and a target score column.
+- The folder "Sentence_BERT" contains the file `PB_finetuning.py`, which is an example of the embeddings fine-tuning code.
 
 ---
